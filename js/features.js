@@ -122,7 +122,14 @@
   function restyle(map) {
     var C = BUS.mapColors || {};
     var layers = map.getStyle().layers || [];
-    var HIDE = ["poi", "housenumber", "aerodrome_label", "mountain_peak"];
+    var HIDE = ["housenumber", "aerodrome_label", "mountain_peak"];
+    // 장소 이름 중 가게·식당·편의점 같은 것만 숨기고, 학교 건물 이름은 남겨요
+    var SHOPS = BUS.hidePlaceTypes || ["shop", "grocery", "convenience", "supermarket", "restaurant", "fast_food", "cafe", "bar", "beer", "pub",
+      "ice_cream", "bakery", "alcohol_shop", "clothing_store", "hardware", "furniture", "jewelry", "mobile_phone", "music", "shoes",
+      "toys", "florist", "gift", "laundry", "hairdresser", "beauty", "bank", "atm", "fuel", "car", "car_rental", "bicycle",
+      "lodging", "pharmacy", "dentist", "doctors", "veterinary", "cinema", "theatre", "attraction", "marketplace", "optician",
+      "stationery", "books", "art_gallery", "dog_park", "golf", "post", "bus", "railway"];
+    var isShop = ["in", ["coalesce", ["get", "class"], ""], ["literal", SHOPS]];
     var firstAbove = null;
     layers.forEach(function (l) {
       var sl = l["source-layer"];
@@ -132,6 +139,11 @@
         if (sl === "water" && l.type === "fill") map.setPaintProperty(l.id, "fill-color", C.water || "#a8d8f0");
         if (sl === "waterway" && l.type === "line") map.setPaintProperty(l.id, "line-color", C.water || "#a8d8f0");
         if (sl === "building" && l.type === "fill") { map.setPaintProperty(l.id, "fill-color", C.building || "#f4f6f8"); map.setPaintProperty(l.id, "fill-outline-color", "#d9dee4"); }
+        if (l.type === "symbol" && sl === "poi") {
+          map.setPaintProperty(l.id, "text-opacity", ["case", isShop, 0, 1]);
+          map.setPaintProperty(l.id, "icon-opacity", ["case", isShop, 0, 1]);
+          map.setLayoutProperty(l.id, "text-field", ["coalesce", ["get", "name:ko"], ["get", "name"]]);
+        }
         if (l.type === "symbol" && ["transportation_name", "place", "water_name"].indexOf(sl) > -1)
           map.setLayoutProperty(l.id, "text-field", ["coalesce", ["get", "name:ko"], ["get", "name"]]);
       } catch (e) {}
@@ -277,10 +289,9 @@
   }
 
   function busWidgetHTML() {
-    return '<a class="fw-card fw-bus" id="fwBus" href="#bus">' +
-      '<div class="fw-head"><h3>🚌 교내 버스</h3><span class="more-link">지도 열기 →</span></div>' +
-      '<p class="fw-sub">충주캠퍼스 정류장을 지도에서 눌러 보세요. 버스가 몇 정거장 전인지, 몇 분 뒤 오는지 바로 보여요.</p>' +
+    return '<a class="fw-card fw-bus" id="fwBus" href="#bus" aria-label="실시간 버스 지도 열기">' +
       '<span class="fw-bus-map" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21s-6-5.3-6-10a6 6 0 1 1 12 0c0 4.7-6 10-6 10z"/><circle cx="12" cy="11" r="2.3"/></svg>실시간 버스 지도</span>' +
+      '<p class="fw-sub">충주캠퍼스 정류장을 지도에서 눌러 보세요. 버스가 몇 정거장 전인지, 몇 분 뒤 오는지 바로 보여요.</p>' +
     "</a>";
   }
   function busPageHTML() {

@@ -675,7 +675,7 @@ body.no-scroll { overflow: hidden; }
 /* 홈 '교내 버스' 칸 (누르면 지도) */
 a.fw-bus { color: inherit; text-decoration: none; transition: border-color .15s, transform .15s; }
 a.fw-bus:hover, a.fw-bus:focus-visible { border-color: var(--wine); transform: translateY(-2px); }
-.fw-bus-map { margin-top: auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 999px; background: var(--wine); color: var(--white); font: 700 14px/1.2 var(--f-body); }
+.fw-bus-map { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 999px; background: var(--wine); color: var(--white); font: 700 14px/1.2 var(--f-body); }
 .fw-bus-map svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; }
 
 /* 학사일정 화면 */
