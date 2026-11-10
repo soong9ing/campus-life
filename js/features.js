@@ -95,16 +95,110 @@
     });
   }
 
+  /* ---------- 지도 불러오기 ----------
+     1순위: MapLibre + OpenFreeMap (키 없음) — 색을 직접 칠하고 건물·가게 이름을 숨길 수 있어요
+     2순위: 그게 안 되는 기기면 Leaflet + OpenStreetMap 그림 지도 */
+  function loadAsset(tag, url) {
+    return new Promise(function (ok, no) {
+      var el = document.createElement(tag);
+      if (tag === "link") { el.rel = "stylesheet"; el.href = url; ok(); } else { el.src = url; el.onload = ok; el.onerror = no; }
+      document.head.appendChild(el);
+    });
+  }
   function loadLeaflet() {
     if (window.L) return Promise.resolve(window.L);
-    return new Promise(function (ok, no) {
-      var css = document.createElement("link");
-      css.rel = "stylesheet"; css.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
-      document.head.appendChild(css);
-      var js = document.createElement("script");
-      js.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
-      js.onload = function () { ok(window.L); }; js.onerror = no;
-      document.head.appendChild(js);
+    loadAsset("link", "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css");
+    return loadAsset("script", "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js").then(function () { return window.L; });
+  }
+  function loadMapLibre() {
+    if (window.maplibregl) return Promise.resolve(window.maplibregl);
+    loadAsset("link", "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css");
+    return loadAsset("script", "https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js").then(function () {
+      if (!window.maplibregl || (maplibregl.supported && !maplibregl.supported())) throw new Error("no webgl");
+      return window.maplibregl;
+    });
+  }
+  // 카카오맵 느낌으로 다시 칠하기: 캠퍼스 연파랑 · 강 하늘색 · 건물/가게 이름 숨김
+  function restyle(map) {
+    var C = BUS.mapColors || {};
+    var layers = map.getStyle().layers || [];
+    var HIDE = ["poi", "housenumber", "aerodrome_label", "mountain_peak"];
+    var firstAbove = null;
+    layers.forEach(function (l) {
+      var sl = l["source-layer"];
+      try {
+        if (l.type === "symbol" && HIDE.indexOf(sl) > -1) map.setLayoutProperty(l.id, "visibility", "none");
+        if (l.type === "fill-extrusion") map.setLayoutProperty(l.id, "visibility", "none");
+        if (sl === "water" && l.type === "fill") map.setPaintProperty(l.id, "fill-color", C.water || "#a8d8f0");
+        if (sl === "waterway" && l.type === "line") map.setPaintProperty(l.id, "line-color", C.water || "#a8d8f0");
+        if (sl === "building" && l.type === "fill") { map.setPaintProperty(l.id, "fill-color", C.building || "#f4f6f8"); map.setPaintProperty(l.id, "fill-outline-color", "#d9dee4"); }
+        if (l.type === "symbol" && ["transportation_name", "place", "water_name"].indexOf(sl) > -1)
+          map.setLayoutProperty(l.id, "text-field", ["coalesce", ["get", "name:ko"], ["get", "name"]]);
+      } catch (e) {}
+      if (!firstAbove && (sl === "building" || sl === "transportation")) firstAbove = l.id;
+    });
+    try {
+      map.addLayer({
+        id: "knut-campus", type: "fill", source: "openmaptiles", "source-layer": "landuse",
+        filter: ["in", ["get", "class"], ["literal", ["university", "college", "school"]]],
+        paint: { "fill-color": C.campus || "#d3e5f6", "fill-opacity": 0.85 }
+      }, firstAbove || undefined);
+    } catch (e) {}
+  }
+  function makeMap(el) {
+    return loadMapLibre().then(function (ml) {
+      return new Promise(function (ok, no) {
+        var map = new ml.Map({
+          container: el, style: BUS.mapStyle || "https://tiles.openfreemap.org/styles/liberty",
+          center: [BUS.center[1], BUS.center[0]], zoom: (BUS.zoom || 16) - 0.5,
+          attributionControl: { compact: true }, dragRotate: false, pitchWithRotate: false
+        });
+        if (map.touchZoomRotate) map.touchZoomRotate.disableRotation();
+        map.addControl(new ml.NavigationControl({ showCompass: false }), "top-left");
+        var done = false;
+        map.on("load", function () { done = true; restyle(map); ok(map); });
+        map.on("error", function (e) { if (!done) { done = true; try { map.remove(); } catch (x) {} no(e.error || e); } });
+        setTimeout(function () { if (!done) { done = true; try { map.remove(); } catch (x) {} no(new Error("timeout")); } }, 12000);
+      }).then(function (map) {
+        return {
+          remove: function () { map.remove(); },
+          add: function (pos, node, z) {
+            // 지도 라이브러리가 바깥 상자의 위치를 움직이고, 안쪽 핀은 우리 CSS(확대 효과 등)를 그대로 써요
+            var box = document.createElement("div");
+            box.className = "map-mark"; box.style.zIndex = z || 1; box.appendChild(node);
+            new ml.Marker({ element: box, anchor: "center" }).setLngLat([pos[1], pos[0]]).addTo(map);
+            return { setTop: function (on) { box.style.zIndex = on ? 1000 : (z || 1); } };
+          },
+          fit: function (pts) {
+            var b = new ml.LngLatBounds();
+            pts.forEach(function (p) { b.extend([p[1], p[0]]); });
+            map.fitBounds(b, { padding: 50, maxZoom: 16.8, duration: 0 });
+          },
+          panTo: function (pos) { map.easeTo({ center: [pos[1], pos[0]], duration: 400 }); }
+        };
+      });
+    }).catch(function () {
+      // 예비: Leaflet + OpenStreetMap
+      el.innerHTML = "";
+      return loadLeaflet().then(function (L) {
+        var map = L.map(el, { scrollWheelZoom: false }).setView(BUS.center, BUS.zoom || 16);
+        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        }).addTo(map);
+        return {
+          remove: function () { map.remove(); },
+          add: function (pos, node, z) {
+            var m = L.marker(pos, { icon: L.divIcon({ className: "", html: "", iconSize: null }), zIndexOffset: z || 0, keyboard: false }).addTo(map);
+            var holder = m.getElement ? m.getElement() : null;
+            var box = document.createElement("div");
+            box.className = "map-mark map-mark--leaflet"; box.appendChild(node);
+            if (holder) holder.appendChild(box);
+            return { setTop: function (on) { m.setZIndexOffset(on ? 1000 : (z || 0)); } };
+          },
+          fit: function (pts) { map.fitBounds(pts, { padding: [30, 30], maxZoom: 17 }); },
+          panTo: function (pos) { map.panTo(pos); }
+        };
+      });
     });
   }
 
@@ -171,7 +265,7 @@
       if (!document.hidden) fetchArr();
     }, (BUS.refreshSec || 30) * 1000);
     document.querySelectorAll(".stop-pin").forEach(function (el) { el.classList.toggle("is-on", el.dataset.id === s.nodeid); });
-    Object.keys(busMarkers).forEach(function (id) { busMarkers[id].setZIndexOffset(id === s.nodeid ? 1000 : 0); });
+    Object.keys(busMarkers).forEach(function (id) { busMarkers[id].setTop(id === s.nodeid); });
     document.querySelectorAll("[data-stop]").forEach(function (el) { el.setAttribute("aria-pressed", el.dataset.stop === s.nodeid ? "true" : "false"); });
     if (busMap) busMap.panTo(s.pos);
   }
@@ -205,18 +299,14 @@
   function initBusPage() {
     busSel = null; clearInterval(busTimer); clearInterval(busTick);
     var listEl = document.getElementById("busList");
-    loadLeaflet().then(function (L) {
-      var el = document.getElementById("busMap");
-      if (!el) return;
-      if (busMap) { busMap.remove(); busMap = null; }
-      busMap = L.map(el, { scrollWheelZoom: false }).setView(BUS.center, BUS.zoom || 16);
-      // 배경 지도: OpenStreetMap (키 필요 없음). 색은 CSS(.bus-map .leaflet-tile-pane)에서 회색 톤으로 낮춰요
-      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-      }).addTo(busMap);
-      L.marker(BUS.center, { icon: L.divIcon({ className: "campus-pin", html: "<span>한국교통대 충주캠퍼스</span>", iconSize: null }), interactive: false, keyboard: false, zIndexOffset: -1000 }).addTo(busMap);
-      busMarkers = {};
+    var el = document.getElementById("busMap");
+    if (busMap) { try { busMap.remove(); } catch (e) {} busMap = null; }
+    makeMap(el).then(function (map) {
+      if (!document.getElementById("busMap")) return map.remove();
+      busMap = map; busMarkers = {};
+      var campus = document.createElement("div");
+      campus.className = "campus-pin"; campus.innerHTML = "<span>한국교통대 충주캠퍼스</span>";
+      map.add(BUS.center, campus, 0);
       if (!BUS.serviceKey) {
         listEl.innerHTML = '<p class="hint"><b>실시간 정보를 켜려면 인증키가 필요해요.</b><br>data/bus.js 맨 위 설명대로 공공데이터포털 인증키를 serviceKey에 넣어 주세요.</p>';
         return;
@@ -229,18 +319,15 @@
           .sort(function (a, b) { return distM(BUS.center, a.pos) - distM(BUS.center, b.pos); });
         busStops = stops;
         if (!stops.length) { listEl.innerHTML = '<p class="hint">주변 정류장을 찾지 못했어요.</p>'; return; }
-        var bounds = [BUS.center];
         stops.forEach(function (s) {
-          bounds.push(s.pos);
-          var m = L.marker(s.pos, {
-            title: stopName(s),
-            icon: L.divIcon({ className: "", html: '<span class="stop-pin" data-id="' + esc(s.nodeid) + '">' + STOP_SVG + "<em>" + esc(stopName(s)) + "</em></span>", iconSize: [26, 26], iconAnchor: [13, 13] })
-          }).addTo(busMap);
-          if (m.bindTooltip) m.bindTooltip(stopName(s), { direction: "top", offset: [0, -14], className: "stop-tip" });
-          busMarkers[s.nodeid] = m;
-          m.on("click", function () { showStop(s); });
+          var pin = document.createElement("span");
+          pin.className = "stop-pin"; pin.dataset.id = s.nodeid; pin.title = stopName(s);
+          pin.setAttribute("role", "button"); pin.setAttribute("aria-label", stopName(s));
+          pin.innerHTML = STOP_SVG + "<em>" + esc(stopName(s)) + "</em>";
+          pin.addEventListener("click", function (e) { e.stopPropagation(); showStop(s); });
+          busMarkers[s.nodeid] = map.add(s.pos, pin, 2);
         });
-        busMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 17 });
+        map.fit(stops.map(function (s) { return s.pos; }));
         listEl.innerHTML = '<ul>' + stops.map(function (s) {
           return '<li><button type="button" class="stop-item" data-stop="' + esc(s.nodeid) + '" aria-pressed="false">' +
             '<span>' + esc(stopName(s)) + "</span><small>" + (s.nodeno ? "번호 " + esc(s.nodeno) + " · " : "") + Math.round(distM(BUS.center, s.pos)) + "m</small></button></li>";
@@ -255,10 +342,11 @@
         listEl.innerHTML = '<p class="hint">정류장 정보를 불러오지 못했어요. (' + esc(e.message) + ")<br>인증키가 맞는지, 승인된 지 1~2시간이 지났는지 확인해 주세요.</p>";
       });
     }).catch(function () {
-      var el = document.getElementById("busMap");
-      if (el) el.innerHTML = '<p class="hint" style="padding:16px">지도를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.</p>';
+      var el2 = document.getElementById("busMap");
+      if (el2) el2.innerHTML = '<p class="hint" style="padding:16px">지도를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.</p>';
     });
   }
+
 
   /* =============================================================
      2) 학사일정 D-day
@@ -555,6 +643,11 @@
   function inViewer() { try { return window.self !== window.top || !!window.claude; } catch (e) { return true; } }
   if (!inViewer() && "serviceWorker" in navigator && (location.protocol === "https:" || /^(localhost|127\.0\.0\.1)$/.test(location.hostname))) {
     window.addEventListener("load", function () { navigator.serviceWorker.register("sw.js").catch(function () {}); });
+    // 새 버전이 올라오면 한 번만 자동으로 새로고침해서 새 화면을 보여 줘요
+    var hadSW = !!navigator.serviceWorker.controller, reloaded = false;
+    navigator.serviceWorker.addEventListener("controllerchange", function () {
+      if (hadSW && !reloaded) { reloaded = true; location.reload(); }
+    });
   }
   window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); installEvt = e; });
   window.addEventListener("appinstalled", function () { installEvt = null; if (window.Toast) window.Toast("홈 화면에 추가됐어요!"); });
