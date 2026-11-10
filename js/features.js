@@ -35,7 +35,8 @@
      1) 버스 — 충주캠퍼스 정류장 지도 + 실시간 도착 (TAGO API)
      ============================================================= */
   var TAGO = "https://apis.data.go.kr/1613000/";
-  var busMap = null, busTimer = null, busSel = null, busStops = [];
+  var busMap = null, busTimer = null, busTick = null, busSel = null, busStops = [], busMarkers = {};
+  var STOP_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3.5" width="14" height="14" rx="3"/><path d="M5 11h14M8.5 17.5v2.5M15.5 17.5v2.5"/><circle cx="8.5" cy="14.3" r=".9"/><circle cx="15.5" cy="14.3" r=".9"/></svg>';
 
   function tagoURL(path, params) {
     var q = "serviceKey=" + encodeURIComponent(BUS.serviceKey) + "&_type=json&numOfRows=100&pageNo=1";
@@ -107,9 +108,19 @@
     });
   }
 
-  function arrText(a) {
-    var sec = +a.arrtime, min = Math.floor(sec / 60);
-    return sec < 60 ? "곧 도착" : min + "분 후";
+  // 남은 초 → "4분 12초" (1초마다 줄어들어요)
+  function arrText(sec) {
+    sec = Math.max(0, Math.round(sec));
+    if (sec <= 30) return "곧 도착";
+    var m = Math.floor(sec / 60), r = sec % 60;
+    return (m ? m + "분 " : "") + r + "초";
+  }
+  function tickArr() {
+    document.querySelectorAll(".arr-time[data-due]").forEach(function (el) {
+      var left = (+el.dataset.due - Date.now()) / 1000;
+      el.textContent = arrText(left);
+      el.classList.toggle("is-soon", left < 180);
+    });
   }
   function panelHTML(s, list, err) {
     var main = BUS.mainBuses || [];
@@ -120,10 +131,10 @@
     else {
       list = list.slice().sort(function (a, b) { return (+a.arrtime) - (+b.arrtime); });
       body = '<ul class="arr-list">' + list.map(function (a) {
-        var no = String(a.routeno), hot = main.indexOf(no) > -1, soon = +a.arrtime < 180;
+        var no = String(a.routeno), hot = main.indexOf(no) > -1, soon = +a.arrtime < 180, due = Date.now() + (+a.arrtime) * 1000;
         return '<li class="' + (hot ? "is-main" : "") + '"><span class="arr-no">' + esc(no) + "</span>" +
           '<span class="arr-where">' + esc(a.arrprevstationcnt) + "정거장 전" + (a.vehicletp && /저상/.test(a.vehicletp) ? " · 저상" : "") + "</span>" +
-          '<b class="arr-time' + (soon ? " is-soon" : "") + '">' + esc(arrText(a)) + "</b></li>";
+          '<b class="arr-time' + (soon ? " is-soon" : "") + '" data-due="' + due + '">' + esc(arrText(+a.arrtime)) + "</b></li>";
       }).join("") + "</ul>";
     }
     var t = new Date();
@@ -150,17 +161,22 @@
     };
     render(null);
     fetchArr();
-    clearInterval(busTimer);
+    clearInterval(busTimer); clearInterval(busTick);
+    busTick = setInterval(function () {
+      if (!document.getElementById("busPanel") || busSel !== s) return clearInterval(busTick);
+      tickArr();
+    }, 1000);
     busTimer = setInterval(function () {
       if (!document.getElementById("busPanel") || busSel !== s) return clearInterval(busTimer);
       if (!document.hidden) fetchArr();
     }, (BUS.refreshSec || 30) * 1000);
     document.querySelectorAll(".stop-pin").forEach(function (el) { el.classList.toggle("is-on", el.dataset.id === s.nodeid); });
+    Object.keys(busMarkers).forEach(function (id) { busMarkers[id].setZIndexOffset(id === s.nodeid ? 1000 : 0); });
     document.querySelectorAll("[data-stop]").forEach(function (el) { el.setAttribute("aria-pressed", el.dataset.stop === s.nodeid ? "true" : "false"); });
     if (busMap) busMap.panTo(s.pos);
   }
   function closeStop() {
-    busSel = null; clearInterval(busTimer);
+    busSel = null; clearInterval(busTimer); clearInterval(busTick);
     var p = document.getElementById("busPanel"); if (p) { p.hidden = true; p.innerHTML = ""; }
     document.querySelectorAll(".stop-pin.is-on").forEach(function (el) { el.classList.remove("is-on"); });
     document.querySelectorAll('[data-stop][aria-pressed="true"]').forEach(function (el) { el.setAttribute("aria-pressed", "false"); });
@@ -187,24 +203,29 @@
     "</div>";
   }
   function initBusPage() {
-    busSel = null; clearInterval(busTimer);
+    busSel = null; clearInterval(busTimer); clearInterval(busTick);
     var listEl = document.getElementById("busList");
     loadLeaflet().then(function (L) {
       var el = document.getElementById("busMap");
       if (!el) return;
       if (busMap) { busMap.remove(); busMap = null; }
       busMap = L.map(el, { scrollWheelZoom: false }).setView(BUS.center, BUS.zoom || 16);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      // 정류장이 잘 보이도록 연한 회색 배경 지도 (CARTO Positron · 회색 톤)
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+        maxZoom: 20, subdomains: "abcd",
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
       }).addTo(busMap);
-      L.marker(BUS.center, { icon: L.divIcon({ className: "campus-pin", html: "<span>한국교통대 충주캠퍼스</span>", iconSize: null }), interactive: false, keyboard: false }).addTo(busMap);
+      L.marker(BUS.center, { icon: L.divIcon({ className: "campus-pin", html: "<span>한국교통대 충주캠퍼스</span>", iconSize: null }), interactive: false, keyboard: false, zIndexOffset: -1000 }).addTo(busMap);
+      busMarkers = {};
       if (!BUS.serviceKey) {
         listEl.innerHTML = '<p class="hint"><b>실시간 정보를 켜려면 인증키가 필요해요.</b><br>data/bus.js 맨 위 설명대로 공공데이터포털 인증키를 serviceKey에 넣어 주세요.</p>';
         return;
       }
       loadStops().then(function (stops) {
         if (!document.getElementById("busMap")) return;
-        stops = stops.filter(function (s) { return (BUS.hide || []).indexOf(s.nodeid) < 0; })
+        var norm = function (x) { return String(x || "").replace(/\s+/g, ""); };
+        var hideN = (BUS.hideNames || []).map(norm);
+        stops = stops.filter(function (s) { return (BUS.hide || []).indexOf(s.nodeid) < 0 && hideN.indexOf(norm(s.nodenm)) < 0; })
           .sort(function (a, b) { return distM(BUS.center, a.pos) - distM(BUS.center, b.pos); });
         busStops = stops;
         if (!stops.length) { listEl.innerHTML = '<p class="hint">주변 정류장을 찾지 못했어요.</p>'; return; }
@@ -213,8 +234,10 @@
           bounds.push(s.pos);
           var m = L.marker(s.pos, {
             title: stopName(s),
-            icon: L.divIcon({ className: "", html: '<span class="stop-pin" data-id="' + esc(s.nodeid) + '">🚏<em>' + esc(stopName(s)) + "</em></span>", iconSize: [30, 30], iconAnchor: [15, 28] })
+            icon: L.divIcon({ className: "", html: '<span class="stop-pin" data-id="' + esc(s.nodeid) + '">' + STOP_SVG + "<em>" + esc(stopName(s)) + "</em></span>", iconSize: [26, 26], iconAnchor: [13, 13] })
           }).addTo(busMap);
+          if (m.bindTooltip) m.bindTooltip(stopName(s), { direction: "top", offset: [0, -14], className: "stop-tip" });
+          busMarkers[s.nodeid] = m;
           m.on("click", function () { showStop(s); });
         });
         busMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 17 });
