@@ -210,10 +210,10 @@
       if (!el) return;
       if (busMap) { busMap.remove(); busMap = null; }
       busMap = L.map(el, { scrollWheelZoom: false }).setView(BUS.center, BUS.zoom || 16);
-      // 정류장이 잘 보이도록 연한 회색 배경 지도 (CARTO Positron · 회색 톤)
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        maxZoom: 20, subdomains: "abcd",
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+      // 배경 지도: OpenStreetMap (키 필요 없음). 색은 CSS(.bus-map .leaflet-tile-pane)에서 회색 톤으로 낮춰요
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
       }).addTo(busMap);
       L.marker(BUS.center, { icon: L.divIcon({ className: "campus-pin", html: "<span>한국교통대 충주캠퍼스</span>", iconSize: null }), interactive: false, keyboard: false, zIndexOffset: -1000 }).addTo(busMap);
       busMarkers = {};

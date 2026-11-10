@@ -633,6 +633,7 @@ body.no-scroll { overflow: hidden; }
 .stop-item:hover { border-color: var(--wine); }
 .stop-item[aria-pressed="true"] { background: var(--wine); border-color: var(--wine); color: var(--white); }
 .stop-item[aria-pressed="true"] small { color: #f3d6db; }
+.bus-map .leaflet-tile-pane { filter: grayscale(.9) brightness(1.06) contrast(.88); }
 .stop-pin { position: relative; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: #2f6fd6; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: pointer; transition: transform .15s, background .15s; }
 .stop-pin svg { width: 16px; height: 16px; fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; }
 .stop-pin svg circle { fill: #fff; stroke: none; }
