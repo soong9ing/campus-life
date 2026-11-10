@@ -169,7 +169,7 @@
           (b ? '<a class="banner" href="#' + b.route + '"><img src="' + esc(b.image) + '" alt=""><span class="sr-only">' + esc(b.lines.join(" ")) + " · " + esc(b.button) + "</span></a>" : "") +
         "</section>" +
 
-        // 오늘의 캠퍼스: 교내 버스(실시간 정류장) · D-day · 오늘 뭐 먹지
+        // 오늘의 캠퍼스: 교내 버스(지도·실시간) · D-day · 오늘 뭐 먹지
         (window.Features ? '<section class="fw-row" aria-label="오늘의 캠퍼스">' + Features.busWidgetHTML() + Features.ddayWidgetHTML() + Features.pickWidgetHTML() + "</section>" : "") +
 
         // ⑤ 인기 콘텐츠
@@ -816,6 +816,8 @@
           st.cat = "전체"; st.sub = "전체"; st.area = "전체"; st.q = a.dataset.name;
         });
       });
+    } else if (route === "bus") {
+      if (window.Features) Features.initBusPage();
     } else if (route === "search") {
       document.getElementById("searchAgain").addEventListener("submit", function (e) {
         e.preventDefault(); state.query = document.getElementById("searchAgainInput").value.trim(); render(true);

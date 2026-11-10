@@ -1,6 +1,6 @@
 /* =============================================================
    편의 기능 모음
-   1) 교내 버스 실시간 (카카오맵) (data/bus.js)
+   1) 교내 버스 지도·실시간 도착 (data/bus.js)
    2) 학사일정 D-day              (data/calendar.js)
    3) 즐겨찾기 (내 장소)           — 이 브라우저에만 저장
    4) 오늘 뭐 먹지? 랜덤 추천
@@ -11,7 +11,7 @@
    ============================================================= */
 (function () {
   "use strict";
-  var SITE = window.SITE || {}, P = window.PLACES || {}, BUS = window.BUS || { groups: [] }, CAL = window.CALENDAR || { events: [] };
+  var SITE = window.SITE || {}, P = window.PLACES || {}, BUS = window.BUS || {}, CAL = window.CALENDAR || { events: [] };
   var SEC = { food: "맛집", tips: "생활꿀팁", hidden: "숨은장소", etc: "자유" };
   var BY_ID = {};
   Object.keys(SEC).forEach(function (s) { (P[s] || []).forEach(function (it) { BY_ID[it.id] = { sec: s, it: it }; }); });
@@ -32,53 +32,209 @@
   function save(key, v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch (e) {} }
 
   /* =============================================================
-     1) 버스 — 정류장을 누르면 카카오맵 실시간 정보로 연결
+     1) 버스 — 충주캠퍼스 정류장 지도 + 실시간 도착 (TAGO API)
      ============================================================= */
-  function stopLink(s) {
-    if (s.kakao) return s.kakao;
-    return "https://map.kakao.com/link/search/" + encodeURIComponent(s.search || s.name);
+  var TAGO = "https://apis.data.go.kr/1613000/";
+  var busMap = null, busTimer = null, busSel = null, busStops = [];
+
+  function tagoURL(path, params) {
+    var q = "serviceKey=" + encodeURIComponent(BUS.serviceKey) + "&_type=json&numOfRows=100&pageNo=1";
+    Object.keys(params).forEach(function (k) { q += "&" + k + "=" + encodeURIComponent(params[k]); });
+    var url = TAGO + path + "?" + q;
+    return BUS.proxy ? BUS.proxy + encodeURIComponent(url) : url;
   }
-  function allStops() {
-    return (BUS.groups || []).reduce(function (a, g) { return a.concat(g.stops || []); }, []);
+  // TAGO 응답의 item은 배열·객체 하나·빈 문자열 중 하나라서 항상 배열로 바꿔요
+  function tagoItems(json) {
+    var h = json && json.response && json.response.header;
+    if (h && h.resultCode && h.resultCode !== "00") throw new Error(h.resultMsg || "API 오류");
+    var items = json && json.response && json.response.body && json.response.body.items;
+    var it = items && items.item;
+    return !it ? [] : Array.isArray(it) ? it : [it];
   }
-  function busBadges(s) {
-    return (s.buses || []).map(function (b) { return '<span class="bus-no">' + esc(b) + "</span>"; }).join("");
+  function tago(path, params) {
+    return fetch(tagoURL(path, params)).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.text();
+    }).then(function (t) {
+      try { return tagoItems(JSON.parse(t)); }
+      catch (e) {
+        if (/SERVICE_KEY|SERVICE KEY|인증/i.test(t)) throw new Error("인증키 오류");
+        throw e;
+      }
+    });
   }
-  var ARROW = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>';
-  function stopAnchor(s, cls) {
-    return '<a class="' + cls + '" href="' + esc(stopLink(s)) + '" target="_blank" rel="noopener"' +
-      ' aria-label="' + esc(s.name + " (" + s.dir + ") 실시간 도착 정보 카카오맵에서 보기") + '">';
+  function distM(a, b) {
+    var R = 6371000, toR = Math.PI / 180;
+    var dLa = (b[0] - a[0]) * toR, dLo = (b[1] - a[1]) * toR;
+    var x = Math.sin(dLa / 2) * Math.sin(dLa / 2) + Math.cos(a[0] * toR) * Math.cos(b[0] * toR) * Math.sin(dLo / 2) * Math.sin(dLo / 2);
+    return 2 * R * Math.asin(Math.sqrt(x));
   }
+  function stopName(s) { return (BUS.names && BUS.names[s.nodeid]) || s.nodenm; }
+
+  // 캠퍼스가 넓어서 가운데 + 동서남북 다섯 곳 주변 정류장을 모아요 (하루 동안 이 브라우저에 저장)
+  function loadStops() {
+    var key = "knut-bus-stops-v1", cached = load(key, null), c = BUS.center;
+    if (cached && cached.day === ymd(new Date()) && cached.center === c.join(",") && cached.stops.length) return Promise.resolve(cached.stops);
+    var d = 0.0036, pts = [c, [c[0] + d, c[1]], [c[0] - d, c[1]], [c[0], c[1] + d * 1.25], [c[0], c[1] - d * 1.25]];
+    return Promise.all(pts.map(function (p) {
+      return tago("BusSttnInfoInqireService/getCrdntPrxmtSttnList", { gpsLati: p[0], gpsLong: p[1] }).catch(function (e) { return e; });
+    })).then(function (res) {
+      var seen = {}, out = [], err = null;
+      res.forEach(function (list) {
+        if (list instanceof Error) { err = list; return; }
+        list.forEach(function (s) {
+          if (seen[s.nodeid]) return; seen[s.nodeid] = 1;
+          var pos = [+s.gpslati, +s.gpslong];
+          if (distM(c, pos) <= (BUS.radius || 900)) out.push({ nodeid: s.nodeid, nodenm: s.nodenm, nodeno: s.nodeno, citycode: s.citycode, pos: pos });
+        });
+      });
+      if (!out.length && err) throw err;
+      save(key, { day: ymd(new Date()), center: c.join(","), stops: out });
+      return out;
+    });
+  }
+
+  function loadLeaflet() {
+    if (window.L) return Promise.resolve(window.L);
+    return new Promise(function (ok, no) {
+      var css = document.createElement("link");
+      css.rel = "stylesheet"; css.href = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css";
+      document.head.appendChild(css);
+      var js = document.createElement("script");
+      js.src = "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js";
+      js.onload = function () { ok(window.L); }; js.onerror = no;
+      document.head.appendChild(js);
+    });
+  }
+
+  function arrText(a) {
+    var sec = +a.arrtime, min = Math.floor(sec / 60);
+    return sec < 60 ? "곧 도착" : min + "분 후";
+  }
+  function panelHTML(s, list, err) {
+    var main = BUS.mainBuses || [];
+    var body;
+    if (err) body = '<p class="arr-empty">도착 정보를 불러오지 못했어요. 잠시 후 다시 눌러 주세요.<br><small>' + esc(err) + "</small></p>";
+    else if (!list) body = '<p class="arr-empty">불러오는 중…</p>';
+    else if (!list.length) body = '<p class="arr-empty">지금 이 정류장으로 오고 있는 버스가 없어요.<br><small>주말·공휴일·방학이거나 운행 시간이 끝났을 수 있어요.</small></p>';
+    else {
+      list = list.slice().sort(function (a, b) { return (+a.arrtime) - (+b.arrtime); });
+      body = '<ul class="arr-list">' + list.map(function (a) {
+        var no = String(a.routeno), hot = main.indexOf(no) > -1, soon = +a.arrtime < 180;
+        return '<li class="' + (hot ? "is-main" : "") + '"><span class="arr-no">' + esc(no) + "</span>" +
+          '<span class="arr-where">' + esc(a.arrprevstationcnt) + "정거장 전" + (a.vehicletp && /저상/.test(a.vehicletp) ? " · 저상" : "") + "</span>" +
+          '<b class="arr-time' + (soon ? " is-soon" : "") + '">' + esc(arrText(a)) + "</b></li>";
+      }).join("") + "</ul>";
+    }
+    var t = new Date();
+    return '<div class="arr-head"><div><h3>' + esc(stopName(s)) + "</h3>" +
+      '<p class="arr-meta">' + (s.nodeno ? "정류장 번호 " + esc(s.nodeno) + " · " : "") + (list ? pad(t.getHours()) + ":" + pad(t.getMinutes()) + " 기준" : "") + "</p></div>" +
+      '<button type="button" class="arr-btn" id="arrRefresh" aria-label="새로고침">↻</button>' +
+      '<button type="button" class="arr-btn" id="arrClose" aria-label="닫기">✕</button></div>' + body +
+      '<p class="arr-id">ID ' + esc(s.nodeid) + " · " + (BUS.refreshSec || 30) + "초마다 자동으로 새로고침해요</p>";
+  }
+  function showStop(s) {
+    busSel = s;
+    var panel = document.getElementById("busPanel");
+    if (!panel) return;
+    panel.hidden = false;
+    var render = function (list, err) {
+      if (busSel !== s || !document.getElementById("busPanel")) return;
+      panel.innerHTML = panelHTML(s, list, err);
+      document.getElementById("arrRefresh").onclick = function () { fetchArr(); };
+      document.getElementById("arrClose").onclick = function () { closeStop(); };
+    };
+    var fetchArr = function () {
+      tago("ArvlInfoInqireService/getSttnAcctoArvlPrearngeInfoList", { cityCode: s.citycode, nodeId: s.nodeid })
+        .then(function (list) { render(list); }, function (e) { render(null, e.message); });
+    };
+    render(null);
+    fetchArr();
+    clearInterval(busTimer);
+    busTimer = setInterval(function () {
+      if (!document.getElementById("busPanel") || busSel !== s) return clearInterval(busTimer);
+      if (!document.hidden) fetchArr();
+    }, (BUS.refreshSec || 30) * 1000);
+    document.querySelectorAll(".stop-pin").forEach(function (el) { el.classList.toggle("is-on", el.dataset.id === s.nodeid); });
+    document.querySelectorAll("[data-stop]").forEach(function (el) { el.setAttribute("aria-pressed", el.dataset.stop === s.nodeid ? "true" : "false"); });
+    if (busMap) busMap.panTo(s.pos);
+  }
+  function closeStop() {
+    busSel = null; clearInterval(busTimer);
+    var p = document.getElementById("busPanel"); if (p) { p.hidden = true; p.innerHTML = ""; }
+    document.querySelectorAll(".stop-pin.is-on").forEach(function (el) { el.classList.remove("is-on"); });
+    document.querySelectorAll('[data-stop][aria-pressed="true"]').forEach(function (el) { el.setAttribute("aria-pressed", "false"); });
+  }
+
   function busWidgetHTML() {
-    var list = allStops().filter(function (s) { return s.home; }).slice(0, 4);
-    return '<div class="fw-card fw-bus" id="fwBus">' +
-      '<div class="fw-head"><h3>🚌 교내 버스</h3><a class="more-link" href="#bus">정류장 전체 →</a></div>' +
-      '<p class="fw-sub">정류장을 누르면 버스가 지금 어디쯤인지 카카오맵에서 바로 보여요.</p>' +
-      '<ul class="fw-stops">' + list.map(function (s) {
-        return "<li>" + stopAnchor(s, "fw-stop") +
-          '<span class="fw-stop-name">' + esc(s.name) + "<small>" + esc(s.dir) + "</small></span>" +
-          '<span class="fw-stop-go">실시간' + ARROW + "</span></a></li>";
-      }).join("") + "</ul>" +
-    "</div>";
+    return '<a class="fw-card fw-bus" id="fwBus" href="#bus">' +
+      '<div class="fw-head"><h3>🚌 교내 버스</h3><span class="more-link">지도 열기 →</span></div>' +
+      '<p class="fw-sub">충주캠퍼스 정류장을 지도에서 눌러 보세요. 버스가 몇 정거장 전인지, 몇 분 뒤 오는지 바로 보여요.</p>' +
+      '<span class="fw-bus-map" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 21s-6-5.3-6-10a6 6 0 1 1 12 0c0 4.7-6 10-6 10z"/><circle cx="12" cy="11" r="2.3"/></svg>실시간 버스 지도</span>' +
+    "</a>";
   }
   function busPageHTML() {
     return '<div class="wrap sub-page">' +
       '<div class="page-head"><div class="crumb"><a href="#home">홈</a> › 교내 버스</div><h1>교내 버스 실시간</h1>' +
-      "<p>타려는 정류장을 누르면 카카오맵이 열려요. 버스가 지금 몇 정거장 전에 있는지, 몇 분 뒤 도착하는지 바로 확인할 수 있어요. 같은 이름의 정류장이 길 양쪽에 있으니 <b>방향</b>을 꼭 확인하세요.</p>" +
-      '<div class="toolbar">' + (BUS.notice ? '<span class="hint">' + esc(BUS.notice) + "</span>" : "") + "</div></div>" +
-      (BUS.groups || []).map(function (g) {
-        return '<section class="bus-group"><h2>' + esc(g.title) + '</h2><ul class="stop-grid">' +
-          (g.stops || []).map(function (s) {
-            return "<li>" + stopAnchor(s, "stop-card") +
-              '<span class="stop-main"><span class="stop-name">' + esc(s.name) + "</span>" +
-              '<span class="stop-dir">' + esc(s.dir) + "</span>" +
-              '<span class="stop-buses">' + busBadges(s) + "</span></span>" +
-              '<span class="stop-go">카카오맵에서 실시간 보기' + ARROW + "</span>" +
-              "</a></li>";
-          }).join("") + "</ul></section>";
-      }).join("") +
-      (BUS.contact ? '<p class="hint bus-contact">버스 문의: ' + esc(BUS.contact) + "</p>" : "") +
+      "<p>충주캠퍼스 주변 정류장이에요. 지도에서 정류장을 누르면 그 정류장에 올 버스가 몇 정거장 전에 있는지, 몇 분 뒤 도착하는지 보여요. 같은 이름의 정류장이 길 양쪽에 있으니 <b>정류장 번호</b>와 위치를 꼭 확인하세요.</p>" +
+      (BUS.notice ? '<p class="hint">' + esc(BUS.notice) + "</p>" : "") + "</div>" +
+      '<div class="bus-layout">' +
+        '<div class="bus-map-wrap"><div id="busMap" class="bus-map" role="application" aria-label="충주캠퍼스 버스 정류장 지도"></div>' +
+          '<div id="busPanel" class="arr-panel" hidden aria-live="polite"></div></div>' +
+        '<aside class="bus-side"><h2>정류장</h2><div id="busList" class="stop-list"><p class="hint">정류장을 불러오는 중…</p></div></aside>' +
+      "</div>" +
+      (BUS.contact ? '<p class="hint bus-contact">버스 문의: ' + esc(BUS.contact) + " · 실시간 정보: 국토교통부 TAGO</p>" : "") +
     "</div>";
+  }
+  function initBusPage() {
+    busSel = null; clearInterval(busTimer);
+    var listEl = document.getElementById("busList");
+    loadLeaflet().then(function (L) {
+      var el = document.getElementById("busMap");
+      if (!el) return;
+      if (busMap) { busMap.remove(); busMap = null; }
+      busMap = L.map(el, { scrollWheelZoom: false }).setView(BUS.center, BUS.zoom || 16);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      }).addTo(busMap);
+      L.marker(BUS.center, { icon: L.divIcon({ className: "campus-pin", html: "<span>한국교통대 충주캠퍼스</span>", iconSize: null }), interactive: false, keyboard: false }).addTo(busMap);
+      if (!BUS.serviceKey) {
+        listEl.innerHTML = '<p class="hint"><b>실시간 정보를 켜려면 인증키가 필요해요.</b><br>data/bus.js 맨 위 설명대로 공공데이터포털 인증키를 serviceKey에 넣어 주세요.</p>';
+        return;
+      }
+      loadStops().then(function (stops) {
+        if (!document.getElementById("busMap")) return;
+        stops = stops.filter(function (s) { return (BUS.hide || []).indexOf(s.nodeid) < 0; })
+          .sort(function (a, b) { return distM(BUS.center, a.pos) - distM(BUS.center, b.pos); });
+        busStops = stops;
+        if (!stops.length) { listEl.innerHTML = '<p class="hint">주변 정류장을 찾지 못했어요.</p>'; return; }
+        var bounds = [BUS.center];
+        stops.forEach(function (s) {
+          bounds.push(s.pos);
+          var m = L.marker(s.pos, {
+            title: stopName(s),
+            icon: L.divIcon({ className: "", html: '<span class="stop-pin" data-id="' + esc(s.nodeid) + '">🚏<em>' + esc(stopName(s)) + "</em></span>", iconSize: [30, 30], iconAnchor: [15, 28] })
+          }).addTo(busMap);
+          m.on("click", function () { showStop(s); });
+        });
+        busMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 17 });
+        listEl.innerHTML = '<ul>' + stops.map(function (s) {
+          return '<li><button type="button" class="stop-item" data-stop="' + esc(s.nodeid) + '" aria-pressed="false">' +
+            '<span>' + esc(stopName(s)) + "</span><small>" + (s.nodeno ? "번호 " + esc(s.nodeno) + " · " : "") + Math.round(distM(BUS.center, s.pos)) + "m</small></button></li>";
+        }).join("") + "</ul>";
+        listEl.querySelectorAll("[data-stop]").forEach(function (b) {
+          b.addEventListener("click", function () {
+            var s = busStops.filter(function (x) { return x.nodeid === b.dataset.stop; })[0];
+            if (s) { showStop(s); document.getElementById("busMap").scrollIntoView({ behavior: "smooth", block: "start" }); }
+          });
+        });
+      }).catch(function (e) {
+        listEl.innerHTML = '<p class="hint">정류장 정보를 불러오지 못했어요. (' + esc(e.message) + ")<br>인증키가 맞는지, 승인된 지 1~2시간이 지났는지 확인해 주세요.</p>";
+      });
+    }).catch(function () {
+      var el = document.getElementById("busMap");
+      if (el) el.innerHTML = '<p class="hint" style="padding:16px">지도를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.</p>';
+    });
   }
 
   /* =============================================================
@@ -392,7 +548,7 @@
   });
 
   window.Features = {
-    busWidgetHTML: busWidgetHTML, busPageHTML: busPageHTML,
+    busWidgetHTML: busWidgetHTML, busPageHTML: busPageHTML, initBusPage: initBusPage,
     ddayWidgetHTML: ddayWidgetHTML, calendarPageHTML: calendarPageHTML,
     isFav: isFav, toggleFav: toggleFav, favButtonHTML: favButtonHTML, favIds: favIds, onFav: function (fn) { favListeners.push(fn); },
     openStatus: openStatus, openBadgeHTML: openBadgeHTML,

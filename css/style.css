@@ -620,27 +620,56 @@ body.no-scroll { overflow: hidden; }
 .dday--apply .dday-badge { background: #2b7a4b; }
 .dday--holiday .dday-badge { background: #2d5f7b; }
 
-/* 교내 버스 화면 (정류장 → 카카오맵 실시간) */
+/* 교내 버스 화면 (지도 + 실시간 도착) */
 .bus-group h2, .cal-month h2 { margin: 26px 0 10px; font: 400 22px/1.2 var(--f-display); color: var(--title); }
-.stop-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
-.stop-card { height: 100%; min-width: 0; display: flex; flex-direction: column; justify-content: space-between; gap: 14px; padding: 16px 18px; background: var(--paper); border: 1px solid var(--card-line); border-radius: 14px; box-shadow: var(--shadow); color: inherit; text-decoration: none; transition: border-color .15s, transform .15s; }
-.stop-card:hover, .stop-card:focus-visible { border-color: var(--wine); transform: translateY(-2px); }
-.stop-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.stop-name { font: 700 17px/1.35 var(--f-body); color: var(--ink); }
-.stop-dir { font-size: 13px; color: var(--muted); }
-.stop-buses { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
-.bus-no { padding: 2px 9px; border-radius: 999px; background: #e7f0e9; color: #2b6a3f; font: 700 12.5px/1.5 var(--f-body); font-variant-numeric: tabular-nums; }
-.stop-go { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 999px; background: #fee500; color: #191919; font: 700 13.5px/1.2 var(--f-body); }
-.stop-go svg, .fw-stop-go svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
-.bus-contact { margin-top: 22px; }
+.bus-layout { margin-top: 18px; display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; align-items: start; }
+.bus-map-wrap { position: relative; min-width: 0; }
+.bus-map { height: 520px; border-radius: 14px; border: 1px solid var(--card-line); box-shadow: var(--shadow); overflow: hidden; background: #eef0ea; z-index: 0; }
+.bus-side { min-width: 0; padding: 14px; background: var(--paper); border: 1px solid var(--card-line); border-radius: 14px; box-shadow: var(--shadow); max-height: 520px; overflow: auto; }
+.bus-side h2 { margin: 0 0 8px; font: 400 20px/1.2 var(--f-display); color: var(--title); }
+.stop-list ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.stop-item { width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 9px 12px; border: 1px solid var(--card-line); border-radius: 10px; background: var(--white, #fff); font: 700 14px/1.35 var(--f-body); color: var(--ink); text-align: left; cursor: pointer; }
+.stop-item small { font-weight: 400; font-size: 12px; color: var(--soft); }
+.stop-item:hover { border-color: var(--wine); }
+.stop-item[aria-pressed="true"] { background: var(--wine); border-color: var(--wine); color: var(--white); }
+.stop-item[aria-pressed="true"] small { color: #f3d6db; }
+.stop-pin { position: relative; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: #fff; border: 2px solid var(--wine); font-size: 15px; box-shadow: 0 2px 6px rgba(0,0,0,.25); cursor: pointer; }
+.stop-pin em { position: absolute; top: 100%; left: 50%; transform: translateX(-50%); margin-top: 3px; white-space: nowrap; font: 700 11px/1.3 var(--f-body); font-style: normal; color: var(--ink); background: rgba(255,255,255,.92); padding: 1px 5px; border-radius: 5px; pointer-events: none; }
+.stop-pin.is-on { background: var(--wine); transform: scale(1.18); z-index: 2; }
+.stop-pin.is-on em { background: var(--wine); color: #fff; }
+.campus-pin span { display: inline-block; transform: translate(-50%, -50%); white-space: nowrap; padding: 4px 10px; border-radius: 999px; background: rgba(141,31,53,.88); color: #fff; font: 700 12px/1.3 var(--f-body); pointer-events: none; }
+.arr-panel { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 500; max-height: 62%; overflow: auto; padding: 14px 16px; background: var(--paper); border: 1px solid var(--card-line); border-radius: 14px; box-shadow: 0 8px 28px rgba(0,0,0,.18); }
+.arr-panel[hidden] { display: none; }
+.arr-head { display: flex; align-items: flex-start; gap: 6px; }
+.arr-head > div { flex: 1; min-width: 0; }
+.arr-head h3 { margin: 0; font: 700 17px/1.35 var(--f-body); color: var(--ink); }
+.arr-meta { margin: 2px 0 0; font-size: 12px; color: var(--soft); }
+.arr-btn { flex: none; width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--card-line); background: #fff; font-size: 15px; cursor: pointer; color: var(--ink); }
+.arr-btn:hover { border-color: var(--wine); }
+.arr-list { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.arr-list li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 10px; background: #f6f1ea; }
+.arr-list li.is-main { background: #fdeef0; }
+.arr-no { flex: none; min-width: 48px; text-align: center; padding: 3px 8px; border-radius: 8px; background: #2b6a3f; color: #fff; font: 700 14px/1.3 var(--f-body); font-variant-numeric: tabular-nums; }
+.arr-list li.is-main .arr-no { background: var(--wine); }
+.arr-where { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); }
+.arr-time { flex: none; font-size: 15px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.arr-time.is-soon { color: #c2410c; }
+.arr-empty { margin: 12px 0 2px; font-size: 14px; color: var(--muted); line-height: 1.6; }
+.arr-empty small, .arr-id { font-size: 11.5px; color: var(--soft); }
+.arr-id { margin: 10px 0 0; }
+.bus-contact { margin-top: 18px; }
+@media (max-width: 860px) {
+  .bus-layout { grid-template-columns: 1fr; }
+  .bus-map { height: 64vh; min-height: 380px; }
+  .bus-side { max-height: none; }
+  .arr-panel { left: 8px; right: 8px; bottom: 8px; max-height: 70%; }
+}
 
-/* 홈 '교내 버스' 칸 */
-.fw-stops { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.fw-stop { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px 8px 12px; border: 1px solid var(--card-line); border-radius: 10px; background: var(--paper); color: inherit; text-decoration: none; }
-.fw-stop:hover, .fw-stop:focus-visible { border-color: var(--wine); }
-.fw-stop-name { display: flex; flex-direction: column; min-width: 0; font-size: 14px; font-weight: 700; color: var(--ink); }
-.fw-stop-name small { font-size: 11.5px; font-weight: 400; color: var(--soft); }
-.fw-stop-go { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border-radius: 999px; background: #fee500; color: #191919; font: 700 12px/1.2 var(--f-body); }
+/* 홈 '교내 버스' 칸 (누르면 지도) */
+a.fw-bus { color: inherit; text-decoration: none; transition: border-color .15s, transform .15s; }
+a.fw-bus:hover, a.fw-bus:focus-visible { border-color: var(--wine); transform: translateY(-2px); }
+.fw-bus-map { margin-top: auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 999px; background: var(--wine); color: var(--white); font: 700 14px/1.2 var(--f-body); }
+.fw-bus-map svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; }
 
 /* 학사일정 화면 */
 .cal-list { list-style: none; margin: 0; padding: 0; background: var(--paper); border: 1px solid var(--card-line); border-radius: 14px; overflow: hidden; }
